@@ -1,0 +1,64 @@
+# OSCAR public-inference dependencies.
+# Verified on Python 3.11, CUDA 12.8, torch 2.10 + cu128, RTX PRO 6000 Blackwell.
+#
+# NOTE: TransformerEngine 2.11 is required at runtime but is NOT on PyPI for
+# this torch/CUDA combination. Build from source against your Python +
+# CUDA toolchain before running inference:
+#   https://github.com/NVIDIA/TransformerEngine
+# (any TE 2.11.x cpython-3.11 build matched to your CUDA stack works.)
+#
+# Install torch first:
+#   uv pip install torch==2.10.0 torchvision==0.25.0 \
+#       --index-url https://download.pytorch.org/whl/cu128
+# then:
+#   uv pip install -r requirements_minimal.txt
+
+# Core PyTorch + diffusion
+torch==2.10.0
+torchvision==0.25.0
+diffusers==0.35.2
+transformers>=4.45,<5
+safetensors>=0.4
+huggingface_hub>=0.25
+accelerate
+
+# Numerics / data
+einops==0.8.1
+numpy>=1.24,<2.3
+Pillow>=10
+torchmetrics
+pandas
+matplotlib
+opencv-python
+fvcore
+
+# Video I/O
+imageio[ffmpeg]>=2.34   # transitively pulls imageio-ffmpeg
+av>=15
+decord==0.6.0      # matches scripts/evaluate.py read_video_frames (decord-first
+                   # with a cv2 fallback). cv2.resize / cv2.INTER_LINEAR is the
+                   # canonical resize path — using imageio + PIL.BILINEAR here
+                   # diverges from the oracle metric numbers by ~1 uint8 level
+                   # per pixel on non-480x640 sources.
+
+# Config / utilities
+hydra-core
+omegaconf
+attrs
+loguru
+termcolor
+setuptools
+ftfy
+pytz
+
+# Imaginaire / Cosmos / TE inference-graph imports (hard-imported at module load,
+# even when their features are unused at inference time).
+pynvml
+wandb              # imaginaire telemetry init imports unconditionally
+boto3              # easy_io S3 fallback (hard import in tokenizer loader)
+onnx
+onnxscript         # TE pytorch_onnx_extensions
+megatron-core      # chained import from worldsim/_ext/callbacks/every_n_draw_sample.py
+
+# Qwen2.5-VL (text encoder for Cosmos-Reason1-7B)
+qwen-vl-utils

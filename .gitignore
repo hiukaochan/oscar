@@ -1,0 +1,27 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+build/
+dist/
+*.egg-info/
+.vscode/
+.idea/
+.DS_Store
+
+# Inference artifacts (local-only)
+local_models/
+dumps/
+outputs/
+checkpoints
+checkpoints/
+hf_cache/
+*.distcp
+*.safetensors
+*.pt
+*.bin
+*.pth
+
+# Logs
+*.log
