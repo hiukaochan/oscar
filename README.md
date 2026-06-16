@@ -51,6 +51,7 @@ Each tile shows *OSCAR output · skeleton conditioning · ground truth* for one 
 
 ## 🫨 News
 
+- **2026-06-16** — Released the [OSCAR policy-rollout videos](https://huggingface.co/datasets/zywu2115/OSCAR_policy_rollout): real-robot rollouts paired with OSCAR world-model rollouts from the RoboArena policy-evaluation experiment.
 - **2026-05-14** — Initial release: OSCAR-2B model weights, inference CLI, and `oscar_diffusers` / `oscar_diffsynth` wrapper libraries.
 
 ## Quick Start
