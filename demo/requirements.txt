@@ -1,0 +1,5 @@
+# Skeleton-overlay demo dependencies (CPU-only, no GPU/EGL needed).
+numpy>=1.24
+opencv-python>=4.8
+yourdfpy>=0.0.56
+imageio[ffmpeg]>=2.34
