@@ -29,7 +29,7 @@ __all__ = [
     "setup_backends",
     "load_first_frame_np",
     "load_video_np",
-    "prepare_batch_skeleton",
+    "prepare_batch_joint",
     "run_inference",
 ]
 
@@ -106,9 +106,25 @@ def load_video_np(
     return v
 
 
-def prepare_batch_skeleton(
-    rgb_frames: np.ndarray,
-    condition_frames: np.ndarray,
+def _to_norm_video_tensor(frames_np: np.ndarray, T: int, H: int, W: int) -> torch.Tensor:
+    """uint8 (T, H, W, 3) -> normalized float (1, 3, T, H, W) in [-1, 1].
+
+    Shared by ``prepare_batch_joint`` (inference: single frame tiled across T)
+    and the training-side droid dataset collate (full video windows).
+    """
+    video = torch.stack([
+        torch.from_numpy(frames_np).permute(0, 3, 1, 2).float() / 255.0
+    ])
+    B, _, C, _, _ = video.shape
+    video = video.permute(0, 2, 1, 3, 4)
+    video = _NORM_IMAGE(video.reshape(B * C, T, H, W).permute(1, 0, 2, 3))
+    video = video.permute(1, 0, 2, 3).reshape(B, C, T, H, W)
+    return video
+
+
+def prepare_batch_joint(
+    first_frame_rgb: np.ndarray,
+    first_frame_skeleton: np.ndarray,
     caption: str,
     *,
     num_frames: int,
@@ -116,27 +132,22 @@ def prepare_batch_skeleton(
     height: int,
     width: int,
 ) -> dict:
-    """Skeleton-mode single-sample batch — ported verbatim from worldsim's
-    training EmbodimentDataLoader collate. Both ``rgb_frames`` and
-    ``condition_frames`` must be uint8 (T, H, W, 3)."""
+    """Joint-generation single-sample batch: only the first RGB frame and
+    first skeleton frame are real conditioning signal — both get tiled across
+    the full ``num_frames`` window (the model only ever reads/overwrites frame
+    0 via its per-stream conditioning mask; frames 1..T-1 are targets to be
+    generated, not oracle input). Both ``first_frame_rgb`` and
+    ``first_frame_skeleton`` must be uint8 (H, W, 3).
+    """
     T = num_frames
     H, W = height, width
     latent_T = 1 + (T - 1) // _VAE_TEMPORAL_STRIDE
 
-    videos = torch.stack([
-        torch.from_numpy(rgb_frames).permute(0, 3, 1, 2).float() / 255.0
-    ])
-    B, _, C, _, _ = videos.shape
-    videos = videos.permute(0, 2, 1, 3, 4)
-    videos = _NORM_IMAGE(videos.reshape(B * C, T, H, W).permute(1, 0, 2, 3))
-    videos = videos.permute(1, 0, 2, 3).reshape(B, C, T, H, W)
+    rgb_tiled = np.tile(first_frame_rgb[None], (T, 1, 1, 1))
+    skel_tiled = np.tile(first_frame_skeleton[None], (T, 1, 1, 1))
 
-    conds = torch.stack([
-        torch.from_numpy(condition_frames).permute(0, 3, 1, 2).float() / 255.0
-    ])
-    conds = conds.permute(0, 2, 1, 3, 4)
-    conds = _NORM_IMAGE(conds.reshape(B * C, T, H, W).permute(1, 0, 2, 3))
-    conds = conds.permute(1, 0, 2, 3).reshape(B, C, T, H, W)
+    videos = _to_norm_video_tensor(rgb_tiled, T, H, W)
+    conds = _to_norm_video_tensor(skel_tiled, T, H, W)
 
     return {
         "video": videos,
@@ -156,8 +167,8 @@ def prepare_batch_skeleton(
 def run_inference(
     model,
     *,
-    rgb_frames: np.ndarray,
-    condition_frames: np.ndarray,
+    first_frame_rgb: np.ndarray,
+    first_frame_skeleton: np.ndarray,
     prompt: str,
     negative_prompt: str | None = None,
     fps: float = 15.0,
@@ -168,23 +179,23 @@ def run_inference(
     guidance: float = 6.0,
     shift: float = 5.0,
     seed: int = 42,
-) -> torch.Tensor:
-    """End-to-end OSCAR inference. Returns ``(1, 3, T, H, W)`` fp32 in [-1, 1].
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """End-to-end OSCAR joint inference. Returns ``(rgb_video, skeleton_video)``,
+    each ``(1, 3, T, H, W)`` fp32 in ``[-1, 1]``.
 
-    Inputs ``rgb_frames`` and ``condition_frames`` must be uint8
-    ``(T, H, W, 3)`` at the model's training resolution. Use
-    ``load_video_np`` / ``load_first_frame_np`` + ``np.tile`` to build them
-    in the same way the CLI does, or pass arbitrary arrays for non-file
-    inputs.
+    Inputs ``first_frame_rgb`` and ``first_frame_skeleton`` must be uint8
+    ``(H, W, 3)`` at the model's training resolution. Use ``load_first_frame_np``
+    to build them in the same way the CLI does, or pass arbitrary arrays for
+    non-file inputs.
     """
     assert getattr(model, "text_encoder", None) is not None, (
         "model.text_encoder is None; this experiment expected compute_online=True."
     )
     torch.manual_seed(seed)
 
-    data_batch = prepare_batch_skeleton(
-        rgb_frames=rgb_frames,
-        condition_frames=condition_frames,
+    data_batch = prepare_batch_joint(
+        first_frame_rgb=first_frame_rgb,
+        first_frame_skeleton=first_frame_skeleton,
         caption=prompt,
         num_frames=num_frames,
         fps=fps,
@@ -216,7 +227,7 @@ def run_inference(
     data_batch["neg_t5_text_mask"] = data_batch["t5_text_mask"]
 
     raw_data, x0, condition = model.get_data_and_condition(data_batch)
-    sample = model.generate_samples_from_batch(
+    sample_rgb, sample_skel = model.generate_samples_from_batch(
         data_batch,
         guidance=guidance,
         seed=seed,
@@ -226,4 +237,4 @@ def run_inference(
         is_negative_prompt=True,
         shift=shift,
     )
-    return model.decode(sample)
+    return model.decode(sample_rgb), model.decode(sample_skel)

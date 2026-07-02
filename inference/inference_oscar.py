@@ -1,12 +1,12 @@
 #!/usr/bin/env python
 # SPDX-License-Identifier: Apache-2.0
-"""User-facing OSCAR inference entry.
+"""User-facing OSCAR joint RGB+skeleton inference entry.
 
-Loads the OSCAR Cosmos-I2V-Control model via the existing
-``worldsim`` codepath, constructs a single-sample ``data_batch``
-from a user-provided first frame + skeleton video + prompt,
-runs ``generate_samples_from_batch`` exactly as the oracle would,
-and writes the decoded RGB video.
+Loads the OSCAR joint model (``CosmosJointRGBSkelModel``) via the existing
+``worldsim`` codepath, constructs a single-sample ``data_batch`` from a
+user-provided first RGB frame + first skeleton frame + prompt, runs
+``generate_samples_from_batch`` to jointly denoise both streams, and writes
+the two decoded videos (RGB and skeleton).
 
 Unlike the training-side oracle (``inference_agibot_control.py``),
 this script does NOT instantiate the training dataloader and does
@@ -22,17 +22,14 @@ Usage example (run from the oscar repo root):
         inference/inference_oscar.py \\
         --checkpoint checkpoints/model \\
         --first-frame /path/to/ff.png \\
-        --skeleton-video /path/to/gripper_scenario.mp4 \\
+        --first-frame-skeleton /path/to/skeleton_ff.png \\
         --prompt "robot grasps the bottle" \\
         --negative-prompt "" \\
         --output out.mp4
 
-For typical usage prefer ``bash scripts/run_inference.sh <case>``, which
-wraps this entry point with the per-case ``start_frame``/seed map.
-
 The actual compute happens in ``inference/_core.py`` — both this CLI and
 the ``oscar_diffusers`` / ``oscar_diffsynth`` wrappers delegate there so
-all three surfaces share one byte-identical pipeline.
+all three surfaces share one pipeline.
 """
 
 from __future__ import annotations
@@ -42,8 +39,6 @@ import os
 import sys
 from pathlib import Path
 
-import imageio.v3 as iio
-import numpy as np
 import torch
 import torch.distributed as dist
 from einops import rearrange
@@ -55,7 +50,6 @@ from worldsim._src.utils.model_loader import load_model_from_checkpoint
 
 from inference._core import (
     load_first_frame_np,
-    load_video_np,
     run_inference,
     setup_backends,
 )
@@ -70,33 +64,15 @@ def parse_arguments() -> argparse.Namespace:
         help="Path to a DCP iter_<N> directory (or a .pt/.pth consolidated ckpt).",
     )
     p.add_argument("--first-frame", type=Path, required=True)
-    p.add_argument("--skeleton-video", type=Path, required=True)
     p.add_argument(
-        "--rgb-video",
+        "--first-frame-skeleton",
         type=Path,
-        default=None,
+        required=True,
         help=(
-            "Optional GT video used as batch['video']. The model conditions only "
-            "on frame 0, but the Wan2.1 VAE has a temporal receptive field that "
-            "spans the first chunk, so encoding 16 tiled identical frames vs the "
-            "real first 16 frames produces a slightly different conditioning "
-            "latent. Production users with only a first frame should omit this "
-            "(the script will tile --first-frame across the window). For "
-            "metric-parity verification against worldsim_private's "
-            "scripts/evaluate.py, pass the GT mp4 here so batch['video'] matches "
-            "the oracle byte-for-byte."
-        ),
-    )
-    p.add_argument(
-        "--start-frame",
-        type=int,
-        default=0,
-        help=(
-            "Seek into --skeleton-video by this many frames before reading the "
-            "81-frame window. Oracle scripts/evaluate.py uses "
-            "pick_best_eval_start() to pick a gripper-centered window (often "
-            "frame 91 for agibot samples). Pass that value here to reproduce "
-            "the oracle benchmark numbers."
+            "Path to a single first-frame skeleton/gripper-pose image (e.g. frame 0 "
+            "of a gripper_scenario.mp4, extracted separately). The joint model only "
+            "ever conditions on this one frame -- the rest of the skeleton video is "
+            "generated jointly with RGB, not supplied as input."
         ),
     )
     p.add_argument("--prompt", type=str, required=True)
@@ -126,12 +102,12 @@ def parse_arguments() -> argparse.Namespace:
     p.add_argument(
         "--fps",
         type=float,
-        default=None,
+        default=15.0,
         help=(
             "Per-sample fps fed to the model (matches the training dataloader's "
-            "fps tensor and the output mp4 framerate). If omitted, the skeleton "
-            "mp4's intrinsic fps is read via imageio.immeta -- this matches the "
-            "training collate which records real-valued mp4 fps."
+            "fps tensor and the output mp4 framerate). No video file is read at "
+            "inference time anymore (only first frames), so this can no longer be "
+            "auto-detected -- pass the value used at training time explicitly."
         ),
     )
     return p.parse_args()
@@ -162,30 +138,13 @@ def main() -> int:
         config_file=config_file,
     )
 
-    first_frame_np = load_first_frame_np(args.first_frame, args.height, args.width)
-    skel_np = load_video_np(
-        args.skeleton_video, args.start_frame, args.num_frames, args.height, args.width,
-    )
-    if args.rgb_video is not None:
-        rgb_np = load_video_np(
-            args.rgb_video, args.start_frame, args.num_frames, args.height, args.width,
-        )
-    else:
-        rgb_np = np.tile(first_frame_np[None], (args.num_frames, 1, 1, 1))
+    first_frame_rgb_np = load_first_frame_np(args.first_frame, args.height, args.width)
+    first_frame_skel_np = load_first_frame_np(args.first_frame_skeleton, args.height, args.width)
 
-    if args.fps is None:
-        try:
-            meta = iio.immeta(str(args.skeleton_video), plugin="FFMPEG")
-            args.fps = float(meta["fps"])
-            log.info(f"auto-detected skeleton fps={args.fps}")
-        except Exception as e:
-            log.warning(f"could not auto-detect fps ({e!r}); falling back to 15.0")
-            args.fps = 15.0
-
-    sample = run_inference(
+    sample_rgb, sample_skel = run_inference(
         model,
-        rgb_frames=rgb_np,
-        condition_frames=skel_np,
+        first_frame_rgb=first_frame_rgb_np,
+        first_frame_skeleton=first_frame_skel_np,
         prompt=args.prompt,
         negative_prompt=args.negative_prompt,
         fps=args.fps,
@@ -202,12 +161,18 @@ def main() -> int:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     base = str(args.output).split(".mp4")[0]
     save_img_or_video(
-        rearrange(sample.float().clamp(-1, 1).cpu(), "b c t h w -> c t h (b w)") * 0.5
+        rearrange(sample_rgb.float().clamp(-1, 1).cpu(), "b c t h w -> c t h (b w)") * 0.5
         + 0.5,
-        base,
+        f"{base}_rgb",
         fps=args.fps,
     )
-    log.info(f"==> finished save video to {base}.mp4")
+    save_img_or_video(
+        rearrange(sample_skel.float().clamp(-1, 1).cpu(), "b c t h w -> c t h (b w)") * 0.5
+        + 0.5,
+        f"{base}_skel",
+        fps=args.fps,
+    )
+    log.info(f"==> finished saving videos to {base}_rgb.mp4 and {base}_skel.mp4")
     return 0
 
 

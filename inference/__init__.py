@@ -9,7 +9,7 @@ from inference._core import (
     COSMOS_DEFAULT_NEGATIVE_PROMPT,
     load_first_frame_np,
     load_video_np,
-    prepare_batch_skeleton,
+    prepare_batch_joint,
     run_inference,
     setup_backends,
 )
@@ -19,6 +19,6 @@ __all__ = [
     "setup_backends",
     "load_first_frame_np",
     "load_video_np",
-    "prepare_batch_skeleton",
+    "prepare_batch_joint",
     "run_inference",
 ]

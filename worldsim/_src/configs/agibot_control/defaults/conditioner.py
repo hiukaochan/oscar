@@ -35,6 +35,7 @@ from worldsim._src.utils.context_parallel import broadcast_split_tensor, find_sp
 from worldsim._ext.imaginaire.lazy_config import LazyCall as L
 from worldsim._ext.imaginaire.lazy_config import LazyDict
 from worldsim._src.conditioner.cosmos2_v2v_conditioner import Video2WorldConditioner, Video2WorldConditionerV2, ControlVideo2WorldConditioner
+from worldsim._src.conditioner.cosmos2_joint_conditioner import JointVideo2WorldConditioner
 from worldsim._src.predict2.models.video2world_rectified_flow import COSMOS_CONTROL_KEY
 
 
@@ -88,6 +89,14 @@ ControlVideoPredictionConditioner: LazyDict = L(ControlVideo2WorldConditioner)(
     **_CONTROL_CONFIG,
 )
 
+# The joint model no longer takes an externally-supplied clean skeleton latent (no more
+# COSMOS_CONTROL_KEY remap) -- gt_frames_skel / condition_skel_input_mask_B_C_T_H_W are set by
+# CosmosJointRGBSkelModel.get_data_and_condition() calling set_joint_video_condition() after this
+# conditioner runs, mirroring how ControlVideo2WorldConditioner's gt_frames is set today. So the
+# joint conditioner only needs the plain shared embedder set.
+JointVideoPredictionConditioner: LazyDict = L(JointVideo2WorldConditioner)(
+    **_SHARED_CONFIG,
+)
 
 
 def register_conditioner():
@@ -111,4 +120,11 @@ def register_conditioner():
         package="model.config.conditioner",
         name="control_video_prediction_conditioner",
         node=ControlVideoPredictionConditioner,
+    )
+
+    cs.store(
+        group="conditioner",
+        package="model.config.conditioner",
+        name="joint_video_prediction_conditioner",
+        node=JointVideoPredictionConditioner,
     )

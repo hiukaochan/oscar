@@ -22,7 +22,8 @@ from worldsim._src.models.wan_t2v_model import T2VModelConfig
 from worldsim._src.predict2.models.video2world_rectified_flow import (
     Video2WorldModelRectifiedFlow,
     Video2WorldModelRectifiedFlowConfig,
-    CosmosI2VControlModel
+    CosmosI2VControlModel,
+    CosmosJointRGBSkelModel,
 )
 
 ddp_wan2pt1_config = dict(
@@ -79,9 +80,24 @@ FSDP_RECTIFIED_FLOW_CONFIG_Control = dict(
 
 
 
+FSDP_RECTIFIED_FLOW_CONFIG_Joint = dict(
+    trainer=dict(
+        distributed_parallelism="fsdp",
+    ),
+    model=L(CosmosJointRGBSkelModel)(
+        config=Video2WorldModelRectifiedFlowConfig(
+            fsdp_shard_size=8,
+            state_t=24,
+        ),
+        _recursive_=False,
+    ),
+)
+
+
 def register_model():
     cs = ConfigStore.instance()
     cs.store(group="model", package="_global_", name="ddp_iv2_control", node=ddp_wan2pt1_config)
     cs.store(group="model", package="_global_", name="fsdp_i2v_control", node=fsdp_wan2pt1_config)
     cs.store(group="model", package="_global_", name="fsdp_cosmos_i2v_rectified_flow", node=FSDP_RECTIFIED_FLOW_CONFIG)
     cs.store(group="model", package="_global_", name="fsdp_cosmos_i2v_rectified_flow_control", node=FSDP_RECTIFIED_FLOW_CONFIG_Control)
+    cs.store(group="model", package="_global_", name="fsdp_cosmos_i2v_rectified_flow_joint", node=FSDP_RECTIFIED_FLOW_CONFIG_Joint)

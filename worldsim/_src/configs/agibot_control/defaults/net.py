@@ -21,6 +21,7 @@ from  worldsim._ext.imaginaire.lazy_config import LazyDict
 from worldsim._src.modules.selective_activation_checkpoint import SACConfig as SACConfig
 from worldsim._src.networks.wan2pt1_i2v_concat import Wan2pt1I2VConcat
 from worldsim._src.predict2.networks.minimal_lvg_v1_dit import MinimalV1LVGDiT
+from worldsim._src.predict2.networks.minimal_joint_dit import MinimalV1JointDiT
 from worldsim._src.predict2.networks.minimal_v4_dit import SACConfig
 # since we could only init from t2v for the i2v model, so the in_dim is smaller
 WAN2PT1_I2V_1PT3B: LazyDict = L(Wan2pt1I2VConcat)(
@@ -137,6 +138,34 @@ COSMOS_V1_2B_NET_MININET_Concat: LazyDict = L(MinimalV1LVGDiT)(
 )
 
 
+COSMOS_V1_2B_NET_MININET_Joint: LazyDict = L(MinimalV1JointDiT)(
+    max_img_h=240,
+    max_img_w=240,
+    max_frames=128,
+    in_channels=16,
+    out_channels=16,
+    patch_spatial=2,
+    patch_temporal=1,
+    model_channels=2048,
+    num_blocks=28,
+    num_heads=16,
+    concat_padding_mask=True,
+    pos_emb_cls="rope3d",
+    pos_emb_learnable=True,
+    pos_emb_interpolation="crop",
+    use_adaln_lora=True,
+    adaln_lora_dim=256,
+    atten_backend="minimal_a2a",
+    extra_per_block_abs_pos_emb=False,  # required False -- MinimalV1JointDiT asserts this
+    rope_h_extrapolation_ratio=1.0,
+    rope_w_extrapolation_ratio=1.0,
+    rope_t_extrapolation_ratio=1.0,
+    sac_config=SACConfig(),
+    # no additional_concat_ch / additional_embed_alpha -- removed for the joint DiT, replaced by
+    # dual patch embedders + modality embeddings + temporal-axis concatenation (see class docstring)
+)
+
+
 def register_net():
     cs = ConfigStore.instance()
     cs.store(group="net", package="model.config.net", name="wan2pt1_i2v_1pt3B", node=WAN2PT1_I2V_1PT3B)
@@ -146,3 +175,4 @@ def register_net():
     cs.store(group="net", package="model.config.net", name="cosmos_v1_7B", node=COSMOS_V1_7B_NET_MININET)
     cs.store(group="net", package="model.config.net", name="cosmos_v1_14B", node=COSMOS_V1_14B_NET_MININET)
     cs.store(group="net", package="model.config.net", name="cosmos_v1_2B_concat", node=COSMOS_V1_2B_NET_MININET_Concat)
+    cs.store(group="net", package="model.config.net", name="cosmos_v1_2B_joint", node=COSMOS_V1_2B_NET_MININET_Joint)
